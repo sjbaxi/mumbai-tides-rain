@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mumbai Suburbs Weather, Rainfall & High Tide Timings</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .legend-color {
+      width: 16px;
+      height: 16px;
+      display: inline-block;
+      margin-right: 4px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans">
+  <div class="max-w-6xl mx-auto p-4">
+    <h1 class="text-3xl font-bold mb-4 text-center">Mumbai Suburbs Weather, Rainfall & High Tide Timings</h1>
+    <p class="text-sm text-center text-gray-600 mb-4">Last updated: <span id="timestamp"></span></p>
+    <div id="coincide-alert" class="text-sm text-center text-red-600 font-bold mb-4 hidden">Rain is coinciding with high tides.</div>
+    <div id="tide-info" class="mb-2 text-sm text-center text-blue-800 font-medium">Loading tide data...</div>
+    <div class="mb-4 text-sm text-gray-600 text-center italic">Data provided by OpenWeatherMap and Stormglass.io</div>
+    <div class="flex justify-center mb-4">
+      <button id="refresh-button" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow">Refresh Now</button>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 mb-4 text-xs text-center">
+      <div class="bg-blue-100 p-2 rounded">0-10 mm: Light Rain</div>
+      <div class="bg-blue-300 p-2 rounded">10-40 mm: Moderate Rain</div>
+      <div class="bg-blue-500 text-white p-2 rounded">40-70 mm: Heavy Rain</div>
+      <div class="bg-blue-700 text-white p-2 rounded">70+ mm: Very Heavy Rain</div>
+    </div>
+    <div class="mb-4 text-sm text-gray-700 text-center">Click on a suburb to see hourly forecast.</div>
+    <div id="weather-container" class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"></div>
+    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+      <div class="bg-white rounded-xl shadow-lg max-w-2xl w-full p-4 overflow-y-auto max-h-[90vh]">
+        <div class="flex justify-between items-center mb-4">
+          <h2 class="text-lg font-bold" id="modal-title">Hourly Forecast</h2>
+          <button id="close-modal" class="text-red-600 font-bold">Close</button>
+        </div>
+        <div id="modal-content" class="space-y-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const mumbaiSuburbs = {
+      "Andheri": { lat: 19.1197, lon: 72.8468 },
+      "Bandra": { lat: 19.0606, lon: 72.8364 },
+      "Borivali": { lat: 19.2290, lon: 72.8567 },
+      "Thane": { lat: 19.2183, lon: 72.9781 },
+      "Chembur": { lat: 19.0615, lon: 72.8822 },
+      "Dadar": { lat: 19.0184, lon: 72.8424 },
+      "Vashi": { lat: 19.0880, lon: 72.9998 },
+      "Colaba": { lat: 18.9067, lon: 72.8147 }
+    };
+
+    const apiKey = "1a53eed1bd3d5713ba274bbd324b99d6";
+    const stormglassKey = "c5b325fa-3a4e-11f0-89da-0242ac130006-c5b326a4-3a4e-11f0-89da-0242ac130006";
+    const highTideHours = [7, 8, 20, 21];
+
+    function updateTimestamp() {
+      const now = new Date();
+      document.getElementById("timestamp").innerText = now.toLocaleString();
+    }
+
+    async function fetchTideInfo() {
+      try {
+        const response = await fetch("https://api.stormglass.io/v2/tide/extremes/point?lat=18.96&lng=72.82", {
+          headers: { 'Authorization': stormglassKey }
+        });
+        const data = await response.json();
+        const extremes = data.data;
+        const today = new Date().toISOString().slice(0, 10);
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+
+        const todayTides = extremes.filter(t => t.time.startsWith(today)).map(t => `${t.type} Tide: ${new Date(t.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+        const tomorrowTides = extremes.filter(t => t.time.startsWith(tomorrow)).map(t => `${t.type} Tide: ${new Date(t.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+
+        document.getElementById("tide-info").innerHTML = `
+          <div>Today: ${todayTides.join(', ')}</div>
+          <div>Tomorrow: ${tomorrowTides.join(', ')}</div>`;
+      } catch (error) {
+        document.getElementById("tide-info").textContent = "Failed to load tide data.";
+        console.error("Tide fetch failed:", error);
+      }
+    }
+
+    async function renderWeather() {
+      const container = document.getElementById("weather-container");
+      container.innerHTML = "";
+      let rainAtHighTide = false;
+
+      for (const [place, { lat, lon }] of Object.entries(mumbaiSuburbs)) {
+        try {
+          const res = await fetch(`https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric`);
+          const data = await res.json();
+
+          const dayRainTotal = data.list.slice(0, 8).reduce((sum, item) => sum + (item.rain?.["3h"] || 0), 0);
+          const nextDayRainTotal = data.list.slice(8, 16).reduce((sum, item) => sum + (item.rain?.["3h"] || 0), 0);
+          const latestTemp = data.list[0].main.temp;
+          const desc = data.list[0].weather[0].description;
+
+          for (const item of data.list.slice(0, 8)) {
+            const hour = new Date(item.dt_txt).getHours();
+            if (highTideHours.includes(hour) && (item.rain?.["3h"] || 0) > 0) {
+              rainAtHighTide = true;
+            }
+          }
+
+          let rainClass = "bg-blue-100";
+          if (dayRainTotal > 70) rainClass = "bg-blue-700 text-white";
+          else if (dayRainTotal > 40) rainClass = "bg-blue-500 text-white";
+          else if (dayRainTotal > 10) rainClass = "bg-blue-300";
+
+          const card = document.createElement("div");
+          card.className = `${rainClass} p-4 rounded shadow hover:shadow-md transition cursor-pointer`;
+          card.innerHTML = `<h3 class="text-lg font-semibold mb-2">${place}</h3>
+            <div class="text-sm">${desc}</div>
+            <div class="text-sm">Temp: ${latestTemp.toFixed(1)} °C</div>
+            <div class="text-sm">Rain Today: ${dayRainTotal.toFixed(1)} mm</div>
+            <div class="text-sm">Tomorrow Rain Forecast: ${nextDayRainTotal.toFixed(1)} mm</div>`;
+          card.addEventListener("click", () => showHourlyModal(place, data.list));
+          container.appendChild(card);
+        } catch (error) {
+          console.error("Weather fetch failed for", place, error);
+          const errorCard = document.createElement("div");
+          errorCard.className = "bg-gray-300 p-4 rounded shadow text-center text-sm text-red-600";
+          errorCard.textContent = `Failed to load weather for ${place}`;
+          container.appendChild(errorCard);
+        }
+      }
+
+      document.getElementById("coincide-alert").classList.toggle("hidden", !rainAtHighTide);
+      updateTimestamp();
+    }
+
+    function showHourlyModal(title, list) {
+      document.getElementById("modal-title").innerText = `Hourly Forecast for ${title}`;
+      const modalContent = document.getElementById("modal-content");
+      modalContent.innerHTML = list.slice(0, 12).map(item => {
+        const time = new Date(item.dt_txt).toLocaleString();
+        const temp = item.main.temp;
+        const rain = item.rain?.["3h"] || 0;
+        const desc = item.weather[0].description;
+        return `<div class="text-sm">${time}: ${temp}°C, Rain: ${rain} mm, ${desc}</div>`;
+      }).join("");
+      document.getElementById("modal").classList.remove("hidden");
+    }
+
+    document.getElementById("close-modal").addEventListener("click", () => {
+      document.getElementById("modal").classList.add("hidden");
+    });
+
+    document.getElementById("refresh-button").addEventListener("click", () => {
+      renderWeather();
+      fetchTideInfo();
+    });
+
+    renderWeather();
+    fetchTideInfo();
+    setInterval(() => {
+      renderWeather();
+      fetchTideInfo();
+    }, 15 * 60 * 1000);
+  </script>
+</body>
+</html>
